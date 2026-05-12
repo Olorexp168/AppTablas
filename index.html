@@ -1,21 +1,34 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <!-- Versión de la Aplicación: v1.1.3 - GitHub Ready & Identificación -->
+    <!-- Versión de la Aplicación: v1.1.5 - Resiliencia Total (Local & Cloud) -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Desafío de Tablas v1.1.3 🎓</title>
+    <title>Desafío de Tablas v1.1.5 🎓</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'tablas-individual-v113';
+        // Variables de entorno con protección de errores
+        let firebaseConfig = null;
+        let appId = 'tablas-individual-v115';
+        let db = null;
+        let auth = null;
+
+        try {
+            // Solo intentamos cargar configuración si existe la variable global
+            if (typeof __firebase_config !== 'undefined') {
+                firebaseConfig = JSON.parse(__firebase_config);
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                appId = typeof __app_id !== 'undefined' ? __app_id : appId;
+            }
+        } catch (e) {
+            console.warn("Configuración de Firebase no disponible. Iniciando en modo local.");
+        }
 
         window.appData = {
             db, auth, appId, 
@@ -26,43 +39,63 @@
             currentLevel: 1,
             questions: [],
             currentIndex: 0,
-            errors: 0
+            errors: 0,
+            isLocal: (window.location.protocol === 'file:' || !firebaseConfig)
         };
 
         const initAuth = async () => {
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                await signInWithCustomToken(auth, __initial_auth_token);
-            } else {
-                await signInAnonymously(auth);
+            if (window.appData.isLocal || !auth) {
+                console.log("Modo Local Activo.");
+                setTimeout(() => {
+                    if(document.getElementById('user-info')) {
+                        document.getElementById('user-info').innerText = "Modo Offline (Sin guardado en nube)";
+                    }
+                }, 1000);
+                return;
+            }
+
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (e) {
+                console.error("Error Auth:", e);
+                window.appData.isLocal = true;
             }
         };
 
-        onAuthStateChanged(auth, (user) => {
-            window.appData.user = user;
-            if (user) {
-                loadProgress(user.uid);
-            }
-        });
+        if (auth) {
+            onAuthStateChanged(auth, (user) => {
+                window.appData.user = user;
+                if (user) {
+                    loadProgress(user.uid);
+                }
+            });
+        }
 
         initAuth();
 
         async function loadProgress(uid) {
-            const docRef = doc(db, 'artifacts', appId, 'users', uid, 'progress', 'main');
-            onSnapshot(docRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    window.appData.userProgress = docSnap.data();
-                    if(document.getElementById('lobby').classList.contains('hidden') === false) {
-                        renderTableProgress();
+            if (window.appData.isLocal || !db) return;
+            try {
+                const docRef = doc(db, 'artifacts', window.appData.appId, 'users', uid, 'progress', 'main');
+                onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        window.appData.userProgress = docSnap.data();
+                        if(document.getElementById('lobby') && !document.getElementById('lobby').classList.contains('hidden')) {
+                            renderTableProgress();
+                        }
                     }
-                }
-            }, (error) => console.error("Error:", error));
+                }, (error) => console.log("Firestore detenido o en local."));
+            } catch (e) {
+                window.appData.isLocal = true;
+            }
         }
 
         window.saveProgress = async (table, level, success) => {
-            if (!window.appData.user) return;
-            const uid = window.appData.user.uid;
             const current = window.appData.userProgress[table] || { l1: false, l2: false, attempts: 0 };
-            
             const newData = {
                 ...window.appData.userProgress,
                 [table]: {
@@ -71,173 +104,219 @@
                     attempts: (current.attempts || 0) + 1
                 }
             };
-            
-            await setDoc(doc(db, 'artifacts', appId, 'users', uid, 'progress', 'main'), newData);
+            window.appData.userProgress = newData;
+
+            if (!window.appData.isLocal && window.appData.user && db) {
+                const uid = window.appData.user.uid;
+                try {
+                    await setDoc(doc(db, 'artifacts', window.appData.appId, 'users', uid, 'progress', 'main'), newData);
+                } catch (e) {
+                    console.error("Error guardado nube:", e);
+                }
+            }
         };
     </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Fredoka+One&family=Quicksand:wght@400;700&display=swap');
         body { font-family: 'Quicksand', sans-serif; background-color: #f8fafc; }
         .header-font { font-family: 'Fredoka One', cursive; }
-        .card-pop { transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-        .card-pop:hover { transform: scale(1.05); }
+        .card-pop { transition: all 0.2s ease; }
+        .card-pop:hover { transform: translateY(-4px); }
     </style>
 </head>
 <body class="min-h-screen p-4 flex flex-col items-center">
 
-    <!-- Pantalla de Bienvenida (Nuevo en v1.1.3) -->
-    <div id="welcome-screen" class="w-full max-w-md bg-white rounded-3xl shadow-xl p-8 border-4 border-indigo-500 text-center">
+    <!-- Pantalla de Bienvenida -->
+    <div id="welcome-screen" class="w-full max-w-md bg-white rounded-3xl shadow-xl p-8 border-4 border-indigo-500 text-center mt-10">
         <h1 class="header-font text-3xl text-indigo-600 mb-6">¡Hola! 👋</h1>
         <p class="text-gray-600 mb-6">Escribe tu nombre para empezar tu entrenamiento de tablas.</p>
-        <input type="text" id="student-name-input" class="w-full p-4 border-2 border-gray-200 rounded-2xl mb-6 text-center text-xl outline-indigo-500" placeholder="Tu nombre aquí...">
-        <button onclick="enterLobby()" class="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl hover:bg-indigo-700 transition shadow-lg">Entrar al Aula</button>
+        <input type="text" id="student-name-input" class="w-full p-4 border-2 border-gray-200 rounded-2xl mb-6 text-center text-xl outline-indigo-500" placeholder="Tu nombre aquí..." onkeypress="if(event.key==='Enter') enterLobby()">
+        <button id="btn-enter" onclick="enterLobby()" class="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl hover:bg-indigo-700 transition shadow-lg">Entrar al Aula</button>
     </div>
 
     <!-- Pantalla Inicial: Selección de Tabla -->
-    <div id="lobby" class="hidden w-full max-w-2xl bg-white rounded-3xl shadow-xl p-8 border-4 border-indigo-500">
+    <div id="lobby" class="hidden w-full max-w-2xl bg-white rounded-3xl shadow-xl p-8 border-4 border-indigo-500 mt-10">
         <header class="text-center mb-8">
             <h1 class="header-font text-3xl text-indigo-600">Progreso de <span id="display-name" class="text-green-600">...</span></h1>
-            <p class="text-gray-500 mt-1">Supera los niveles y envía el informe</p>
+            <p class="text-gray-500 mt-1 text-sm">Selecciona una tabla para practicar</p>
         </header>
         <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-8" id="progress-grid"></div>
-        <div id="user-info" class="text-center text-[10px] text-gray-400 font-mono">Iniciando sesión segura...</div>
+        <div id="user-info" class="text-center text-[10px] text-gray-400 font-mono italic">Conectando...</div>
     </div>
 
-    <!-- Juego y Reporte (Mismo que v1.1.2 con mejoras estéticas) -->
-    <div id="game-screen" class="hidden w-full max-w-xl">
+    <!-- Juego -->
+    <div id="game-screen" class="hidden w-full max-w-xl mt-10">
         <div class="bg-white rounded-3xl shadow-2xl overflow-hidden border-4 border-indigo-500">
             <div class="bg-indigo-500 p-4 text-white flex justify-between items-center">
-                <span id="level-tag" class="font-bold bg-indigo-700 px-3 py-1 rounded-full text-xs">Nivel 1</span>
-                <button onclick="location.reload()" class="text-white hover:text-red-200 font-bold">✕ Salir</button>
+                <span id="level-tag" class="font-bold bg-indigo-700 px-3 py-1 rounded-full text-xs uppercase tracking-widest">Cargando...</span>
+                <button onclick="location.reload()" class="bg-white/20 hover:bg-white/40 px-3 py-1 rounded-lg text-sm font-bold">✕ Salir</button>
             </div>
-            <div class="p-8 text-center">
-                <div class="text-sm text-gray-400 uppercase font-bold mb-2">Pregunta <span id="q-count">1</span> / 11</div>
-                <div id="question-text" class="header-font text-7xl text-gray-800 mb-8">2 x 1</div>
-                <input type="number" id="answer-input" class="w-full text-center text-5xl p-4 border-4 border-indigo-100 rounded-2xl focus:border-indigo-500 outline-none" placeholder="?" autofocus>
-                <div id="feedback-area" class="h-12 mt-4 font-bold"></div>
+            <div class="p-10 text-center">
+                <div class="text-xs text-gray-400 uppercase font-black mb-4 tracking-widest">Pregunta <span id="q-count">1</span> de 11</div>
+                <div id="question-text" class="header-font text-8xl text-gray-800 mb-10 select-none">? x ?</div>
+                <input type="number" id="answer-input" class="w-full text-center text-6xl p-6 border-4 border-indigo-500/10 rounded-3xl focus:border-indigo-500 outline-none transition-all shadow-inner" placeholder="?" autofocus>
+                <div id="feedback-area" class="h-16 mt-6 font-bold text-xl flex items-center justify-center"></div>
             </div>
         </div>
     </div>
 
-    <div id="report-screen" class="hidden w-full max-w-xl bg-white rounded-3xl shadow-2xl p-8 border-4 border-green-500">
+    <!-- Reporte -->
+    <div id="report-screen" class="hidden w-full max-w-xl bg-white rounded-3xl shadow-2xl p-8 border-4 border-green-500 mt-10">
         <div class="text-center">
-            <div id="report-icon" class="text-6xl mb-4">🏆</div>
-            <h2 id="report-title" class="header-font text-3xl text-green-600 mb-2">¡Resultado!</h2>
-            <div class="bg-gray-50 p-4 rounded-2xl text-left border-2 border-dashed border-gray-300 mb-6">
-                <p class="text-xs font-bold text-gray-400 mb-2 uppercase">Copia este informe en Classroom:</p>
-                <div id="classroom-text" class="text-sm font-mono text-gray-700 whitespace-pre-wrap"></div>
+            <div id="report-icon" class="text-7xl mb-4">🏆</div>
+            <h2 id="report-title" class="header-font text-3xl text-green-600 mb-4">¡Gran trabajo!</h2>
+            <div class="bg-gray-50 p-6 rounded-3xl text-left border-2 border-dashed border-gray-300 mb-6">
+                <p class="text-xs font-black text-gray-400 mb-3 uppercase tracking-wider">Copia este informe en Classroom:</p>
+                <div id="classroom-text" class="text-sm font-mono text-gray-700 whitespace-pre-wrap leading-relaxed"></div>
             </div>
-            <button onclick="copyReport()" id="copy-btn" class="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl hover:bg-indigo-700 mb-3 transition">📋 Copiar para Classroom</button>
-            <button onclick="showLobby()" class="w-full text-gray-500 font-bold py-2 hover:underline">Volver a mis tablas</button>
+            <button onclick="copyReport()" id="copy-btn" class="w-full bg-indigo-600 text-white font-bold py-5 rounded-2xl hover:bg-indigo-700 mb-4 transition shadow-lg active:scale-95">📋 Copiar para Classroom</button>
+            <button onclick="showLobby()" class="w-full text-gray-400 font-bold py-2 hover:text-indigo-600 transition">Regresar al panel de tablas</button>
         </div>
     </div>
 
     <script>
-        function enterLobby() {
-            const name = document.getElementById('student-name-input').value.trim();
-            if(!name) { alert("Por favor, escribe tu nombre"); return; }
+        window.enterLobby = function() {
+            const nameInput = document.getElementById('student-name-input');
+            const name = nameInput.value.trim();
+            if(!name) { 
+                nameInput.classList.add('border-red-500');
+                setTimeout(() => nameInput.classList.remove('border-red-500'), 1000);
+                return; 
+            }
             window.appData.studentName = name;
             document.getElementById('welcome-screen').classList.add('hidden');
             document.getElementById('lobby').classList.remove('hidden');
             document.getElementById('display-name').innerText = name;
             renderTableProgress();
-        }
+        };
 
-        function renderTableProgress() {
+        window.renderTableProgress = function() {
             const grid = document.getElementById('progress-grid');
             if(!grid) return;
             grid.innerHTML = '';
             for (let i = 1; i <= 10; i++) {
                 const prog = window.appData.userProgress[i] || { l1: false, l2: false, attempts: 0 };
                 const btn = document.createElement('div');
-                btn.className = `card-pop p-4 rounded-2xl border-4 flex flex-col items-center cursor-pointer 
+                btn.className = `card-pop p-4 rounded-2xl border-4 flex flex-col items-center cursor-pointer shadow-sm
                                 ${prog.l2 ? 'bg-green-50 border-green-400' : (prog.l1 ? 'bg-blue-50 border-blue-400' : 'bg-gray-50 border-gray-200')}`;
-                btn.innerHTML = `<span class="header-font text-2xl ${prog.l2 ? 'text-green-600' : (prog.l1 ? 'text-blue-600' : 'text-gray-400')}">${i}</span>
-                                 <div class="flex gap-1 mt-2">
-                                    <div class="w-3 h-3 rounded-full ${prog.l1 ? 'bg-blue-500' : 'bg-gray-200'}"></div>
-                                    <div class="w-3 h-3 rounded-full ${prog.l2 ? 'bg-green-500' : 'bg-gray-200'}"></div>
+                
+                btn.innerHTML = `<span class="header-font text-3xl ${prog.l2 ? 'text-green-600' : (prog.l1 ? 'text-blue-600' : 'text-gray-400')}">${i}</span>
+                                 <div class="flex gap-1.5 mt-3">
+                                    <div class="w-3.5 h-3.5 rounded-full ${prog.l1 ? 'bg-blue-500 shadow-sm' : 'bg-gray-200'}"></div>
+                                    <div class="w-3.5 h-3.5 rounded-full ${prog.l2 ? 'bg-green-500 shadow-sm' : 'bg-gray-200'}"></div>
                                  </div>`;
                 btn.onclick = () => startActivity(i);
                 grid.appendChild(btn);
             }
-            document.getElementById('user-info').innerText = `ID de sesión: ${window.appData.user?.uid.substring(0,8)}...`;
-        }
+        };
 
-        function startActivity(tableNum) {
+        window.startActivity = function(tableNum) {
             const prog = window.appData.userProgress[tableNum] || { l1: false, l2: false };
             window.appData.currentTable = tableNum;
             window.appData.currentLevel = (prog.l1 && !prog.l2) ? 2 : 1;
-            if(prog.l2) window.appData.currentLevel = 2; // Permitir repetir nivel 2
+            if(prog.l2) window.appData.currentLevel = 2; 
             
             window.appData.currentIndex = 0;
             window.appData.errors = 0;
+            
             let numbers = [0,1,2,3,4,5,6,7,8,9,10];
-            if (window.appData.currentLevel === 2) numbers.sort(() => Math.random() - 0.5);
+            if (window.appData.currentLevel === 2) {
+                numbers.sort(() => Math.random() - 0.5);
+            }
+            
             window.appData.questions = numbers.map(n => ({ a: tableNum, b: n, res: tableNum * n }));
 
             document.getElementById('lobby').classList.add('hidden');
             document.getElementById('game-screen').classList.remove('hidden');
-            document.getElementById('level-tag').innerText = `Nivel ${window.appData.currentLevel}`;
+            document.getElementById('level-tag').innerText = `Nivel ${window.appData.currentLevel}: ${window.appData.currentLevel === 1 ? 'Ordenado' : 'Aleatorio'}`;
             nextQuestion();
-        }
+        };
 
-        function nextQuestion() {
-            if (window.appData.currentIndex >= window.appData.questions.length) { finishActivity(); return; }
+        window.nextQuestion = function() {
+            if (window.appData.currentIndex >= window.appData.questions.length) { 
+                finishActivity(); 
+                return; 
+            }
             const q = window.appData.questions[window.appData.currentIndex];
             document.getElementById('question-text').innerText = `${q.a} x ${q.b}`;
             document.getElementById('q-count').innerText = window.appData.currentIndex + 1;
             const input = document.getElementById('answer-input');
-            input.value = ''; input.focus();
+            input.value = ''; 
+            input.focus();
             document.getElementById('feedback-area').innerHTML = '';
-        }
+        };
 
-        document.getElementById('answer-input').onkeypress = (e) => { if(e.key === 'Enter') checkAnswer(); };
+        document.getElementById('answer-input').onkeypress = (e) => { 
+            if(e.key === 'Enter') checkAnswer(); 
+        };
 
-        function checkAnswer() {
+        window.checkAnswer = function() {
             const input = document.getElementById('answer-input');
+            const feedback = document.getElementById('feedback-area');
             const val = parseInt(input.value);
+            if(isNaN(val)) return;
+
             const correct = window.appData.questions[window.appData.currentIndex].res;
             if (val === correct) {
                 window.appData.currentIndex++;
-                document.getElementById('feedback-area').innerHTML = '<span class="text-green-500">¡Bien!</span>';
-                setTimeout(nextQuestion, 400);
+                feedback.innerHTML = '<span class="text-green-500 animate-bounce">¡Muy bien! ✨</span>';
+                setTimeout(nextQuestion, 500);
             } else {
                 window.appData.errors++;
-                document.getElementById('feedback-area').innerHTML = '<span class="text-red-500">Casi... ¡otra vez!</span>';
+                feedback.innerHTML = '<span class="text-red-500">Casi... ¡inténtalo de nuevo! 💡</span>';
                 input.value = '';
+                input.classList.add('border-red-500');
+                setTimeout(() => input.classList.remove('border-red-500'), 500);
             }
-        }
+        };
 
-        async function finishActivity() {
+        window.finishActivity = async function() {
             const success = window.appData.errors === 0;
-            await window.saveProgress(window.appData.currentTable, window.appData.currentLevel, success);
+            const table = window.appData.currentTable;
+            const level = window.appData.currentLevel;
+
+            await window.saveProgress(table, level, success);
+            
             document.getElementById('game-screen').classList.add('hidden');
             document.getElementById('report-screen').classList.remove('hidden');
             
-            const log = `📝 INFORME DE TABLAS
+            const log = `📝 INFORME DE DESAFÍO
+----------------------------
 Alumno: ${window.appData.studentName}
-Tabla: ${window.appData.currentTable} | Nivel: ${window.appData.currentLevel}
-Resultado: ${success ? 'TODO CORRECTO ✅' : 'CON ERRORES ❌'}
-Fallos: ${window.appData.errors}
-ID: ${window.appData.user.uid}`;
+Tabla: ${table} | Nivel: ${level}
+Errores: ${window.appData.errors}
+Resultado: ${success ? 'NIVEL SUPERADO ✅' : 'NECESITA PRACTICAR 🔄'}
+----------------------------
+ID: ${window.appData.user ? window.appData.user.uid.substring(0,10) : 'SESION_LOCAL'}`;
+
             document.getElementById('classroom-text').innerText = log;
             document.getElementById('report-icon').innerText = success ? "🏆" : "💪";
-        }
+            document.getElementById('report-title').innerText = success ? "¡Nivel Completado!" : "¡Sigue intentándolo!";
+        };
 
-        function copyReport() {
+        window.copyReport = function() {
             const text = document.getElementById('classroom-text').innerText;
             const dummy = document.createElement("textarea");
-            document.body.appendChild(dummy); dummy.value = text; dummy.select();
-            document.execCommand("copy"); document.body.removeChild(dummy);
-            document.getElementById('copy-btn').innerText = "✅ ¡Copiado!";
-            setTimeout(() => document.getElementById('copy-btn').innerText = "📋 Copiar para Classroom", 2000);
-        }
+            document.body.appendChild(dummy); 
+            dummy.value = text; 
+            dummy.select();
+            document.execCommand("copy"); 
+            document.body.removeChild(dummy);
+            
+            const btn = document.getElementById('copy-btn');
+            btn.innerText = "✅ ¡Copiado!";
+            btn.classList.replace('bg-indigo-600', 'bg-green-600');
+            setTimeout(() => {
+                btn.innerText = "📋 Copiar para Classroom";
+                btn.classList.replace('bg-green-600', 'bg-indigo-600');
+            }, 2000);
+        };
 
-        function showLobby() {
+        window.showLobby = function() {
             document.getElementById('report-screen').classList.add('hidden');
             document.getElementById('lobby').classList.remove('hidden');
             renderTableProgress();
-        }
+        };
     </script>
 </body>
 </html>
